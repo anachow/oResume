@@ -9,10 +9,10 @@ import { createClient } from '@supabase/supabase-js'
 import { createClientComponentClient, createServerComponentClient } from '@supabase/auth-helpers-nextjs'
 import { cookies } from 'next/headers'
 
-// Get environment variables
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+// Get environment variables with fallbacks for build time
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 
 /**
  * Client-side Supabase client
@@ -50,5 +50,16 @@ export const createAdminClient = () => {
 
 /**
  * Basic client for non-authenticated operations
+ * Lazy-loaded to avoid build-time errors
  */
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+let _supabaseClient: ReturnType<typeof createClient> | null = null
+
+export const getSupabaseClient = () => {
+  if (!_supabaseClient && supabaseUrl && supabaseAnonKey) {
+    _supabaseClient = createClient(supabaseUrl, supabaseAnonKey)
+  }
+  return _supabaseClient
+}
+
+// For backwards compatibility
+export const supabase = getSupabaseClient()

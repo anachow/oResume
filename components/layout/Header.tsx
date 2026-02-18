@@ -31,13 +31,13 @@ export const Header: React.FC = () => {
               Search Candidates
             </Link>
             <Link
-              href="/employers"
+              href="/employers/signup"
               className="text-text hover:text-primary transition-colors"
             >
               For Employers
             </Link>
             <Link
-              href="/recruiters"
+              href="/recruiters/signup"
               className="text-text hover:text-primary transition-colors"
             >
               For Recruiters
@@ -89,14 +89,14 @@ export const Header: React.FC = () => {
                 Search Candidates
               </Link>
               <Link
-                href="/employers"
+                href="/employers/signup"
                 className="text-text hover:text-primary transition-colors"
                 onClick={() => setMobileMenuOpen(false)}
               >
                 For Employers
               </Link>
               <Link
-                href="/recruiters"
+                href="/recruiters/signup"
                 className="text-text hover:text-primary transition-colors"
                 onClick={() => setMobileMenuOpen(false)}
               >

@@ -1,21 +1,19 @@
 /**
  * API Route: Submit Job Seeker Profile
  * POST /api/job-seeker/submit
- *
- * Handles:
- * 1. Resume file upload to Supabase Storage
- * 2. User account creation or lookup
- * 3. Job seeker profile creation
- * 4. Resume metadata storage
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
 function getAdminClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    throw new Error('Missing Supabase environment variables: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
+  }
+
   return createClient(supabaseUrl, supabaseServiceKey, {
     auth: { autoRefreshToken: false, persistSession: false }
   })
@@ -78,8 +76,9 @@ export async function POST(request: NextRequest) {
       })
 
       if (authError || !authData.user) {
+        console.error('Auth createUser error:', authError)
         return NextResponse.json(
-          { error: 'Failed to create user account', details: authError?.message },
+          { error: `Failed to create user account: ${authError?.message || 'Unknown auth error'}` },
           { status: 500 }
         )
       }

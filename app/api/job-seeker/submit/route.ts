@@ -1,6 +1,18 @@
 /**
- * API Route: Submit Job Seeker Profile
+ * API Route: Submit Candidate (Job Seeker) Profile
  * POST /api/job-seeker/submit
+ *
+ * Maps to actual Supabase schema:
+ *   users(id, email, mobile, role, subscription)
+ *   candidates(user_id, full_name, dob, country, state, city,
+ *              current_location, preferred_locations, willing_to_relocate,
+ *              total_experience, relevant_experience, notice_period,
+ *              job_type, work_mode, industry, current_salary,
+ *              preferred_salary, visibility, profile_completed)
+ *   skills(id, name)
+ *   candidate_skills(candidate_id, skill_id, is_primary)
+ *   resumes(id, candidate_id, title, file_path, file_type, file_size, version)
+ *   analytics_events(user_id, event_type, metadata)
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -26,45 +38,40 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
 
-    // ── Extract all fields ──────────────────────────────────────────────
-    const email               = formData.get('email') as string
-    const mobile              = formData.get('mobile') as string
-    const mobile_country_code = formData.get('mobile_country_code') as string
-    const whatsapp_consent    = formData.get('whatsapp_consent') === 'true'
-    const full_name           = formData.get('full_name') as string
-    const date_of_birth       = (formData.get('date_of_birth') as string) || null
-    const current_location    = JSON.parse(formData.get('current_location') as string)
+    // ── Extract form fields ──────────────────────────────────────────────
+    const email            = formData.get('email') as string
+    const mobile           = (formData.get('mobile') as string) || null
+    const full_name        = formData.get('full_name') as string
+    const date_of_birth    = (formData.get('date_of_birth') as string) || null
+
+    // current_location arrives as JSON { city, state, country }
+    const currentLocationRaw = (formData.get('current_location') as string) || '{}'
+    let loc: { city?: string; state?: string; country?: string } = {}
+    try { loc = JSON.parse(currentLocationRaw) } catch { /* ignore */ }
+
     const preferred_locations = JSON.parse((formData.get('preferred_locations') as string) || '[]')
     const willing_to_relocate = formData.get('willing_to_relocate') === 'true'
-    const job_code            = (formData.get('job_code') as string) || null
-    const industry            = formData.get('industry') as string
+    const industry            = (formData.get('industry') as string) || null
     const job_types           = JSON.parse((formData.get('job_types') as string) || '[]')
     const work_modes          = JSON.parse((formData.get('work_modes') as string) || '[]')
     const notice_period       = (formData.get('notice_period') as string) || null
-    const total_experience    = parseInt((formData.get('total_experience') as string) || '0')
+    const total_experience    = parseFloat((formData.get('total_experience') as string) || '0')
     const relevant_experience = formData.get('relevant_experience')
-      ? parseInt(formData.get('relevant_experience') as string) : null
-    const career_break              = formData.get('career_break') === 'true'
-    const career_break_duration     = (formData.get('career_break_duration') as string) || null
-    const employment_gap_explanation= (formData.get('employment_gap_explanation') as string) || null
-    const current_salary            = formData.get('current_salary')
-      ? JSON.parse(formData.get('current_salary') as string) : null
-    const preferred_salary    = JSON.parse((formData.get('preferred_salary') as string) || '{}')
-    const primary_skill       = formData.get('primary_skill') as string
-    const secondary_skills    = JSON.parse((formData.get('secondary_skills') as string) || '[]')
-    const licenses_certifications = JSON.parse((formData.get('licenses_certifications') as string) || '[]')
-    const resume_title        = formData.get('resume_title') as string
-    const cover_letter_text   = (formData.get('cover_letter_text') as string) || null
-    const resume_visibility   = (formData.get('resume_visibility') as string) || 'searchable_hidden_contact'
-    const terms_consent       = formData.get('terms_consent') === 'true'
-    const contact_consent     = formData.get('contact_consent') === 'true'
-    const communication_consent = formData.get('communication_consent') === 'true'
+      ? parseFloat(formData.get('relevant_experience') as string) : null
+
+    // Salary: form may send JSON ({ min, max, currency }) or plain number — store as numeric
+    const current_salary  = parseSalaryToNumber(formData.get('current_salary') as string | null)
+    const preferred_salary = parseSalaryToNumber(formData.get('preferred_salary') as string | null)
+
+    const primary_skill    = (formData.get('primary_skill') as string) || null
+    const secondary_skills = JSON.parse((formData.get('secondary_skills') as string) || '[]') as string[]
+    const resume_title     = (formData.get('resume_title') as string) || null
+    const resume_visibility = (formData.get('resume_visibility') as string) || 'public'
 
     // ── Step 1: Resolve or create the user ─────────────────────────────
     let userId: string
     let isNewUser = false
 
-    // First check our users table
     const { data: existingDbUser } = await supabase
       .from('users')
       .select('id')
@@ -72,22 +79,23 @@ export async function POST(request: NextRequest) {
       .maybeSingle()
 
     if (existingDbUser) {
-      // Returning user — use existing id
+      // Returning user
       userId = existingDbUser.id
+      if (mobile) {
+        await supabase.from('users').update({ mobile }).eq('id', userId)
+      }
     } else {
-      // Check if orphaned auth user exists (previous failed attempt)
+      // Check for orphaned auth user from a previous failed attempt
       const { data: authList } = await supabase.auth.admin.listUsers()
       const orphanedAuthUser = authList?.users?.find(u => u.email === email)
 
       if (orphanedAuthUser) {
-        // Auth user exists but our users table row is missing — recreate it
         userId = orphanedAuthUser.id
       } else {
-        // Brand new user — create in auth
         const { data: authData, error: authError } = await supabase.auth.admin.createUser({
           email,
           email_confirm: false,
-          user_metadata: { full_name, user_type: 'job_seeker' },
+          user_metadata: { full_name, role: 'candidate' },
         })
 
         if (authError || !authData?.user) {
@@ -101,23 +109,22 @@ export async function POST(request: NextRequest) {
         createdAuthUserId = userId
       }
 
-      // Insert into our users table
+      // Insert into users table (role enum: 'candidate' | 'employer' | 'recruiter' | 'admin')
       const { error: userError } = await supabase.from('users').insert({
         id: userId,
         email,
-        user_type: 'job_seeker',
-        user_status: 'free',
-        email_verified: false,
+        mobile,
+        role: 'candidate',
+        // subscription defaults to 'free' in DB
       })
 
       if (userError) {
-        // Roll back the auth user we just created to avoid orphans
         if (createdAuthUserId) {
           await supabase.auth.admin.deleteUser(createdAuthUserId)
           createdAuthUserId = null
         }
         return NextResponse.json(
-          { error: `Database error (users table): ${userError.message}` },
+          { error: `Database error (users): ${userError.message}` },
           { status: 500 }
         )
       }
@@ -125,58 +132,69 @@ export async function POST(request: NextRequest) {
       isNewUser = true
     }
 
-    // ── Step 2: Upsert job_seeker profile ──────────────────────────────
-    const profilePayload = {
-      user_id: userId,
-      email,
-      mobile,
-      mobile_country_code,
-      whatsapp_consent,
-      full_name,
-      date_of_birth: date_of_birth || null,
-      current_location,
-      preferred_locations,
-      willing_to_relocate,
-      job_code,
-      industry,
-      job_types,
-      work_modes,
-      notice_period,
-      total_experience,
-      relevant_experience,
-      career_break,
-      career_break_duration,
-      employment_gap_explanation,
-      current_salary,
-      preferred_salary,
-      primary_skill,
-      secondary_skills,
-      licenses_certifications,
-      resume_visibility,
-      terms_consent,
-      contact_consent,
-      communication_consent,
-    }
+    // ── Step 2: Upsert candidate profile ───────────────────────────────
+    // Map form visibility value to DB enum value (default 'public')
+    const visibility = mapVisibility(resume_visibility)
 
-    const { data: upsertedProfile, error: profileError } = await supabase
-      .from('job_seekers')
-      .upsert(profilePayload, { onConflict: 'user_id' })
-      .select('id')
-      .single()
+    const { error: candidateError } = await supabase
+      .from('candidates')
+      .upsert({
+        user_id:           userId,
+        full_name,
+        dob:               date_of_birth || null,
+        country:           loc.country || null,
+        state:             loc.state || null,
+        city:              loc.city || null,
+        current_location:  currentLocationRaw,
+        preferred_locations,
+        willing_to_relocate,
+        total_experience,
+        relevant_experience,
+        notice_period,
+        job_type:          job_types,
+        work_mode:         work_modes,
+        industry,
+        current_salary,
+        preferred_salary,
+        visibility,
+        profile_completed: true,
+      }, { onConflict: 'user_id' })
 
-    if (profileError || !upsertedProfile) {
+    if (candidateError) {
       return NextResponse.json(
-        { error: `Database error (job_seekers table): ${profileError?.message}` },
+        { error: `Database error (candidates): ${candidateError.message}` },
         { status: 500 }
       )
     }
 
-    const jobSeekerId = upsertedProfile.id
+    // ── Step 3: Upsert skills ───────────────────────────────────────────
+    const skillsToSave: { name: string; isPrimary: boolean }[] = []
+    if (primary_skill) skillsToSave.push({ name: primary_skill, isPrimary: true })
+    for (const s of secondary_skills) {
+      if (s && typeof s === 'string') skillsToSave.push({ name: s, isPrimary: false })
+    }
 
-    // ── Step 3: Resume file upload ─────────────────────────────────────
+    for (const skill of skillsToSave) {
+      // Ensure skill exists (upsert by name)
+      const { data: skillRow } = await supabase
+        .from('skills')
+        .upsert({ name: skill.name }, { onConflict: 'name' })
+        .select('id')
+        .single()
+
+      if (skillRow?.id) {
+        await supabase
+          .from('candidate_skills')
+          .upsert(
+            { candidate_id: userId, skill_id: skillRow.id, is_primary: skill.isPrimary },
+            { onConflict: 'candidate_id,skill_id' }
+          )
+      }
+    }
+
+    // ── Step 4: Resume file upload ─────────────────────────────────────
     const resumeFile = formData.get('resume_file') as File | null
     let resumeFilePath: string | null = null
-    let resumeUrl: string | null = null
 
     if (resumeFile && resumeFile.size > 0) {
       const fileExt = resumeFile.name.split('.').pop()
@@ -190,20 +208,14 @@ export async function POST(request: NextRequest) {
         console.error('Resume upload error:', uploadError.message)
       } else {
         resumeFilePath = uploadData.path
-        const { data: urlData } = supabase.storage.from('resumes').getPublicUrl(resumeFilePath)
-        resumeUrl = urlData.publicUrl
 
         const { error: resumeMetaError } = await supabase.from('resumes').insert({
-          job_seeker_id: jobSeekerId,
-          title: resume_title,
-          file_path: resumeFilePath,
-          file_url: resumeUrl,
-          file_name: resumeFile.name,
-          file_size: resumeFile.size,
-          file_type: resumeFile.type,
-          version: 1,
-          is_active: true,
-          cover_letter_text,
+          candidate_id: userId,
+          title:        resume_title,
+          file_path:    resumeFilePath,
+          file_type:    resumeFile.type,
+          file_size:    resumeFile.size,
+          version:      1,
         })
 
         if (resumeMetaError) {
@@ -212,27 +224,23 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── Step 4: Audit log (best-effort) ────────────────────────────────
-    await supabase.from('audit_logs').insert({
-      user_id: userId,
-      action: isNewUser ? 'profile_created' : 'profile_updated',
-      resource_type: 'job_seeker',
-      resource_id: jobSeekerId,
-      details: { resume_uploaded: !!resumeFilePath },
-    }).then(() => {})   // ignore failure — audit is non-critical
+    // ── Step 5: Analytics event (best-effort) ──────────────────────────
+    await supabase.from('analytics_events').insert({
+      user_id:    userId,
+      event_type: isNewUser ? 'candidate_registered' : 'candidate_profile_updated',
+      metadata:   { resume_uploaded: !!resumeFilePath },
+    }).then(() => {})
 
     return NextResponse.json({
-      success: true,
-      message: isNewUser
+      success:     true,
+      message:     isNewUser
         ? 'Profile created! Check your email to sign in.'
         : 'Profile updated successfully.',
-      job_seeker_id: jobSeekerId,
-      user_id: userId,
+      user_id:     userId,
       is_new_user: isNewUser,
     })
 
   } catch (error: any) {
-    // Roll back orphaned auth user on unexpected crash
     if (createdAuthUserId) {
       await supabase.auth.admin.deleteUser(createdAuthUserId).catch(() => {})
     }
@@ -242,4 +250,30 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     )
   }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function parseSalaryToNumber(raw: string | null): number | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (typeof parsed === 'number') return parsed
+    // { min, max, amount, value, ... }
+    return parsed.min ?? parsed.amount ?? parsed.value ?? null
+  } catch {
+    const n = parseFloat(raw)
+    return isNaN(n) ? null : n
+  }
+}
+
+function mapVisibility(v: string): string {
+  const map: Record<string, string> = {
+    searchable_hidden_contact: 'public',
+    searchable:                'public',
+    hidden:                    'private',
+    public:                    'public',
+    private:                   'private',
+  }
+  return map[v] ?? 'public'
 }

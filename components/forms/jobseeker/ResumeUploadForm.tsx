@@ -15,12 +15,14 @@ export const ResumeUploadForm: React.FC = () => {
   const [step, setStep] = useState(1)
   const [resumeFiles, setResumeFiles] = useState<File[]>([])
   const [coverLetterFiles, setCoverLetterFiles] = useState<File[]>([])
+  const [submitSuccess, setSubmitSuccess] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [isNewUser, setIsNewUser] = useState(false)
 
   const {
     register,
     handleSubmit,
     watch,
-    setValue,
     formState: { errors, isSubmitting },
   } = useForm<ResumeUploadFormData>({
     resolver: zodResolver(resumeUploadSchema),
@@ -46,20 +48,71 @@ export const ResumeUploadForm: React.FC = () => {
 
   const onSubmit = async (data: ResumeUploadFormData) => {
     try {
-      console.log('Form data:', data)
-      console.log('Resume files:', resumeFiles)
-      console.log('Cover letter files:', coverLetterFiles)
+      setSubmitError(null)
 
-      // TODO: Implement actual submission
-      // 1. Upload resume to Supabase Storage
-      // 2. Create user account if new
-      // 3. Save job seeker profile
-      // 4. Save resume metadata
-      // 5. Redirect to success page
+      const formData = new FormData()
 
-      alert('Form submitted successfully! (Implementation pending)')
+      // Append all text fields
+      formData.append('email', data.email)
+      formData.append('mobile', data.mobile)
+      formData.append('mobile_country_code', data.mobile_country_code)
+      formData.append('whatsapp_consent', String(data.whatsapp_consent))
+      formData.append('full_name', data.full_name)
+      if (data.date_of_birth) formData.append('date_of_birth', data.date_of_birth)
+      formData.append('current_location', JSON.stringify(data.current_location))
+      formData.append('preferred_locations', JSON.stringify(data.preferred_locations || []))
+      formData.append('willing_to_relocate', String(data.willing_to_relocate))
+      if (data.job_code) formData.append('job_code', data.job_code)
+      formData.append('industry', data.industry)
+      formData.append('job_types', JSON.stringify(data.job_types))
+      formData.append('work_modes', JSON.stringify(data.work_modes))
+      if (data.notice_period) formData.append('notice_period', data.notice_period)
+      formData.append('total_experience', String(data.total_experience))
+      if (data.relevant_experience) formData.append('relevant_experience', String(data.relevant_experience))
+      formData.append('career_break', String(data.career_break))
+      if (data.career_break_duration) formData.append('career_break_duration', data.career_break_duration)
+      if (data.employment_gap_explanation) formData.append('employment_gap_explanation', data.employment_gap_explanation)
+      if (data.current_salary) formData.append('current_salary', JSON.stringify(data.current_salary))
+      formData.append('preferred_salary', JSON.stringify(data.preferred_salary))
+      formData.append('primary_skill', data.primary_skill)
+      formData.append('secondary_skills', JSON.stringify(
+        typeof data.secondary_skills === 'string'
+          ? (data.secondary_skills as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+          : data.secondary_skills
+      ))
+      formData.append('licenses_certifications', JSON.stringify(
+        typeof data.licenses_certifications === 'string'
+          ? (data.licenses_certifications as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+          : data.licenses_certifications
+      ))
+      formData.append('resume_title', data.resume_title)
+      if (data.cover_letter_text) formData.append('cover_letter_text', data.cover_letter_text)
+      formData.append('resume_visibility', data.resume_visibility)
+      formData.append('terms_consent', String(data.terms_consent))
+      formData.append('contact_consent', String(data.contact_consent))
+      formData.append('communication_consent', String(data.communication_consent))
+
+      // Append files
+      if (resumeFiles[0]) formData.append('resume_file', resumeFiles[0])
+      if (coverLetterFiles[0]) formData.append('cover_letter_file', coverLetterFiles[0])
+
+      const response = await fetch('/api/job-seeker/submit', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        setSubmitError(result.error || 'Submission failed. Please try again.')
+        return
+      }
+
+      setIsNewUser(result.is_new_user)
+      setSubmitSuccess(true)
     } catch (error) {
       console.error('Form submission error:', error)
+      setSubmitError('An unexpected error occurred. Please try again.')
     }
   }
 
@@ -71,8 +124,50 @@ export const ResumeUploadForm: React.FC = () => {
     if (step > 1) setStep(step - 1)
   }
 
+  if (submitSuccess) {
+    return (
+      <Card>
+        <CardBody>
+          <div className="text-center py-8">
+            <div className="w-16 h-16 bg-accent-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-8 h-8 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-primary mb-2">Profile Submitted!</h2>
+            {isNewUser ? (
+              <p className="text-text-light mb-6">
+                Your profile has been created. Please check your email to verify your account and start getting discovered by employers.
+              </p>
+            ) : (
+              <p className="text-text-light mb-6">
+                Your profile has been updated successfully. Employers and recruiters can now find you.
+              </p>
+            )}
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <a href="/signin" className="inline-flex items-center justify-center px-6 py-3 bg-primary text-white rounded-lg font-medium hover:bg-primary-600 transition-colors">
+                Sign In to Your Account
+              </a>
+              <a href="/" className="inline-flex items-center justify-center px-6 py-3 border-2 border-primary text-primary rounded-lg font-medium hover:bg-primary hover:text-white transition-colors">
+                Back to Home
+              </a>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+    )
+  }
+
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+      {/* Error Message */}
+      {submitError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700">
+          <p className="font-medium">Submission Failed</p>
+          <p className="text-sm mt-1">{submitError}</p>
+        </div>
+      )}
+
       {/* Progress Indicator */}
       <Card>
         <CardBody>
